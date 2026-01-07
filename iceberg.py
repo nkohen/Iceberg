@@ -4,11 +4,12 @@ import time
 from typing import Tuple, List
 
 import vpss
-from musig import SessionContext as MuSigSessionContext, sign as musig_sign, partial_sig_verify, individual_pk, \
-    get_xonly_pk, key_agg_and_tweak, nonce_gen as musig_nonce_gen, nonce_agg as musig_nonce_agg, get_session_values, \
+from musig import SessionContext as MuSigSessionContext, sign as musig_sign, \
+    partial_sig_verify as musig_partial_sig_verify, individual_pk, \
+    get_xonly_pk, key_agg_and_tweak as musig_key_agg_and_tweak, nonce_gen as musig_nonce_gen, \
+    nonce_agg as musig_nonce_agg, get_session_values, \
     has_even_y, point_mul, cpoint, get_session_key_agg_coeff, G, partial_sig_agg as musig_partial_sig_agg, \
-    schnorr_verify
-from musig import bytes_from_int, int_from_bytes, n, InvalidContributionError
+    schnorr_verify, bytes_from_int, int_from_bytes, n, InvalidContributionError
 from vpss import RSSShare, VPSSCommitment, eval_lagrange
 
 key_msg: bytes = 'Iceberg/keygen'.encode()
@@ -104,7 +105,7 @@ def test_random(n: int, t: int, mu: int) -> None:
     v = secrets.randbelow(4)
     tweaks = [secrets.token_bytes(32) for _ in range(v)]
     is_xonly = [secrets.choice([False, True]) for _ in range(v)]
-    aggpk = get_xonly_pk(key_agg_and_tweak(pubkeys, tweaks, is_xonly))
+    aggpk = get_xonly_pk(musig_key_agg_and_tweak(pubkeys, tweaks, is_xonly))
 
     nonce_gen_signers = random.sample(range(1, n+1), mu)
     pubnonces = []
@@ -137,16 +138,16 @@ def test_random(n: int, t: int, mu: int) -> None:
     assert sign_agg(psigs) == psig_1
 
     # aggregated partial sig is valid
-    assert partial_sig_verify(psig_1, pubnonces, pubkeys, tweaks, is_xonly, msg, 0)
+    assert musig_partial_sig_verify(psig_1, pubnonces, pubkeys, tweaks, is_xonly, msg, 0)
 
     # Wrong signer index
-    assert not partial_sig_verify(psig_1, pubnonces, pubkeys, tweaks, is_xonly, msg, 1)
+    assert not musig_partial_sig_verify(psig_1, pubnonces, pubkeys, tweaks, is_xonly, msg, 1)
 
     # Wrong message
-    assert not partial_sig_verify(psig_1, pubnonces, pubkeys, tweaks, is_xonly, secrets.token_bytes(32), 0)
+    assert not musig_partial_sig_verify(psig_1, pubnonces, pubkeys, tweaks, is_xonly, secrets.token_bytes(32), 0)
 
     psig_2 = musig_sign(secnonce_2, sk_2, upper_ctx)
-    assert partial_sig_verify(psig_2, pubnonces, pubkeys, tweaks, is_xonly, msg, 1)
+    assert musig_partial_sig_verify(psig_2, pubnonces, pubkeys, tweaks, is_xonly, msg, 1)
 
     sig = musig_partial_sig_agg([psig_1, psig_2], upper_ctx)
     assert schnorr_verify(msg, aggpk, sig)
