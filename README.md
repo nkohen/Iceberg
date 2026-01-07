@@ -6,4 +6,6 @@ This enables a [MuSig](https://github.com/bitcoin/bips/blob/master/bip-0327.medi
 
 Iceberg is designed to be optimal for use with the [Lightning Network](https://github.com/lightning/bolts) as it does not incur extra rounds of communication, allows different quorums of participants to be online during each signing round, and uses deterministic nonces (making it stateless).
 
-Note that Iceberg requires an honest majority (quorum size >= 2t - 1), and is only performant when nCt is small.
+Note that Iceberg requires an honest majority (quorum size >= 2t - 1), unique signing session identifiers, and is only practical when nCt is small.
+
+A paper containing a security proof for Iceberg is on its way.
