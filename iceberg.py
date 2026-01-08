@@ -1,7 +1,7 @@
 import random
 import secrets
 import time
-from typing import Tuple, List
+from typing import Tuple, List, Optional
 
 import vpss
 from musig import SessionContext as MuSigSessionContext, sign as musig_sign, \
@@ -10,22 +10,22 @@ from musig import SessionContext as MuSigSessionContext, sign as musig_sign, \
     nonce_agg as musig_nonce_agg, get_session_values, \
     has_even_y, point_mul, cpoint, get_session_key_agg_coeff, G, partial_sig_agg as musig_partial_sig_agg, \
     schnorr_verify, bytes_from_int, int_from_bytes, n, InvalidContributionError
-from vpss import RSSShare, VPSSCommitment, eval_lagrange
+from vpss import RSSShare, RSSShareCache, VPSSCommitment, eval_lagrange
 
 key_msg: bytes = 'Iceberg/keygen'.encode()
 
-def key_gen(k: int, sk_k: RSSShare) -> Tuple[bytes, bytes]:
-    (_, sk), (_, pk) = vpss.gen(k, sk_k, key_msg)
+def key_gen(k: int, sk_k: RSSShare, cache: Optional[RSSShareCache] = None) -> Tuple[bytes, bytes]:
+    (_, sk), (_, pk) = vpss.gen(k, sk_k, key_msg, cache)
     return sk, pk
 
 def pk_agg(t: int, mu: int, pks: List[VPSSCommitment]) -> bytes:
     assert vpss.verify(t, mu, pks)
     return vpss.agg(pks)
 
-def nonce_gen(k: int, sk_k: RSSShare, sid: bytes) -> Tuple[bytes, bytes]:
+def nonce_gen(k: int, sk_k: RSSShare, sid: bytes, cache: Optional[RSSShareCache] = None) -> Tuple[bytes, bytes]:
     assert len(sid) == 32
-    gen_share_1, comittment_1 = vpss.gen(k, sk_k, bytes_from_int(1) + sid)
-    gen_share_2, comittment_2 = vpss.gen(k, sk_k, bytes_from_int(2) + sid)
+    gen_share_1, comittment_1 = vpss.gen(k, sk_k, bytes_from_int(1) + sid, cache)
+    gen_share_2, comittment_2 = vpss.gen(k, sk_k, bytes_from_int(2) + sid, cache)
     pubnonce = comittment_1.value + comittment_2.value
     secnonce = gen_share_1.value + gen_share_2.value
     return secnonce, pubnonce
@@ -43,11 +43,11 @@ def nonce_agg(t: int, mu: int, pubnonces: List[Tuple[int, bytes]]) -> bytes:
     aggnonce = vpss.agg(commitments_1) + vpss.agg(commitments_2)
     return aggnonce
 
-def sign(k: int, sk_k: RSSShare, agg_pk: bytes, sid: bytes, upper_session_ctx: MuSigSessionContext) -> bytes:
+def sign(k: int, sk_k: RSSShare, agg_pk: bytes, sid: bytes, upper_session_ctx: MuSigSessionContext, cache: Optional[RSSShareCache] = None) -> bytes:
     assert len(sid) == 32
     sk, _ = key_gen(k, sk_k)
-    gen_share_1, _ = vpss.gen(k, sk_k, bytes_from_int(1) + sid)
-    gen_share_2, _ = vpss.gen(k, sk_k, bytes_from_int(2) + sid)
+    gen_share_1, _ = vpss.gen(k, sk_k, bytes_from_int(1) + sid, cache)
+    gen_share_2, _ = vpss.gen(k, sk_k, bytes_from_int(2) + sid, cache)
 
     (Q, gacc, _, b, R, e) = get_session_values(upper_session_ctx)
     k_1_ = int_from_bytes(gen_share_1.value)
@@ -89,10 +89,12 @@ def sign_agg(psigs: List[Tuple[int, bytes]]) -> bytes:
 def test_random(n: int, t: int, mu: int) -> None:
     prf_sk_shares = vpss.key_gen(n, t, mu)
     prf_sk = {}
+    prf_sk_cache = {}
     pks = []
     for (k, sk_k) in enumerate(prf_sk_shares, 1):
         prf_sk[k] = sk_k
-        _, pk_k = key_gen(k, sk_k)
+        prf_sk_cache[k] = vpss.create_cache(k, sk_k)
+        _, pk_k = key_gen(k, sk_k, prf_sk_cache[k])
         pks.append(VPSSCommitment(k, pk_k))
     pk_1 = pk_agg(t, mu, pks)
 
@@ -110,7 +112,7 @@ def test_random(n: int, t: int, mu: int) -> None:
     nonce_gen_signers = random.sample(range(1, n+1), mu)
     pubnonces = []
     for k in nonce_gen_signers:
-        _, pubnonce_k = nonce_gen(k, prf_sk[k], sid)
+        _, pubnonce_k = nonce_gen(k, prf_sk[k], sid, prf_sk_cache[k])
         pubnonces.append((k, pubnonce_k))
     pubnonce_1 = nonce_agg(t, mu, pubnonces)
 
@@ -123,9 +125,9 @@ def test_random(n: int, t: int, mu: int) -> None:
     signers = random.sample(range(1, n+1), mu)
     psigs = []
     for k in signers:
-        psig_k = sign(k, prf_sk[k], pk_1, sid, upper_ctx)
+        psig_k = sign(k, prf_sk[k], pk_1, sid, upper_ctx, prf_sk_cache[k])
         # sign is deterministic
-        assert sign(k, prf_sk[k], pk_1, sid, upper_ctx) == psig_k
+        assert sign(k, prf_sk[k], pk_1, sid, upper_ctx, prf_sk_cache[k]) == psig_k
         psigs.append((k, psig_k))
     psig_1 = sign_agg(psigs)
 
@@ -133,7 +135,7 @@ def test_random(n: int, t: int, mu: int) -> None:
     concurrent_signers = random.sample(range(1, n+1), mu)
     psigs = []
     for k in concurrent_signers:
-        psig_k = sign(k, prf_sk[k], pk_1, sid, upper_ctx)
+        psig_k = sign(k, prf_sk[k], pk_1, sid, upper_ctx, prf_sk_cache[k])
         psigs.append((k, psig_k))
     assert sign_agg(psigs) == psig_1
 

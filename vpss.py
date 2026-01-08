@@ -60,6 +60,7 @@ def lagrange_coefficient(indices: Set[int], excluding: int, power: int = 0, modu
 
 RSSSummand = NamedTuple('RSSSubShare', [('value', bytes), ('excluded_indices', Set)])
 RSSShare = NewType('RSSShare', List[RSSSummand])
+RSSShareCache = NewType('RSSShareCache', dict[bytes, int])
 VPSSGenShare = NamedTuple('VPSSGenShare', [('index', int), ('value', bytes)])
 VPSSCommitment = NamedTuple('VPSSCommitment', [('index', int), ('value', bytes)])
 
@@ -80,11 +81,23 @@ def key_gen(n: int, t: int, mu: int) -> List[RSSShare]:
 
     return sks
 
-def gen(k: int, sk_k: RSSShare, w: bytes) -> Tuple[VPSSGenShare, VPSSCommitment]:
-    d_k = 0
+def create_cache(k, sk_k: RSSShare) -> RSSShareCache:
+    cache = {}
+
     for (phi_i, a_i) in sk_k:
-        d_k = (d_k + prf(phi_i, w) * eval_lagrange(a_i, 0, k)) % n
+        cache[phi_i] = eval_lagrange(a_i, 0, k) % n
+
+    return RSSShareCache(cache)
+
+def gen(k: int, sk_k: RSSShare, w: bytes, cache: Optional[RSSShareCache] = None) -> Tuple[VPSSGenShare, VPSSCommitment]:
+    if cache is None:
+        cache = create_cache(k, sk_k)
+
+    d_k = 0
+    for (phi_i, _) in sk_k:
+        d_k = (d_k + prf(phi_i, w) * cache[phi_i]) % n
     D_k = point_mul(G, d_k)
+
     return VPSSGenShare(k, bytes_from_int(d_k)), VPSSCommitment(k, cbytes_ext(D_k))
 
 def verify(t: int, mu: int, commitments: List[VPSSCommitment]) -> bool:
