@@ -15,10 +15,25 @@ def eval_lagrange(indices: Set[int], excluding: int, eval_at: int, modulus: int 
 
     return (numerator * pow(denominator, -1, modulus)) % modulus
 
-def lagrange_coefficient(indices: Set[int], excluding: int, power: int = 0, modulus: int = n) -> int:
-    if excluding == 0: # Computing the constant term is the same as evaluating X = 0
-        return eval_lagrange(indices, excluding, excluding, modulus)
+def all_lagrange_coefficients(indices: Set[int], modulus: int = n) -> dict[int, List[int]]:
+    from numpy import poly1d, polyval
+    X = poly1d([1, 0])
 
+    L = poly1d([1])
+    for index in indices:
+        L = L * (X - index)
+
+    result = {}
+    for j in indices:
+        L_j = (L / (X - j))[0]
+        denominator_inv = pow(int(polyval(L_j, j)), -1, modulus)
+        coefficients = [(int(c) * denominator_inv) % modulus for c in L_j.coeffs]
+        coefficients.reverse()
+        result[j] = coefficients
+
+    return result
+
+def lagrange_coefficients(indices: Set[int], excluding: int, modulus: int = n) -> List[int]:
     from numpy import poly1d
     X = poly1d([1, 0])
 
@@ -32,7 +47,16 @@ def lagrange_coefficient(indices: Set[int], excluding: int, power: int = 0, modu
         numerator = poly1d(numerator.coeffs.astype(object) % modulus)
         denominator = (denominator * (index - excluding)) % modulus
 
-    return (int(numerator[power]) * pow(denominator, -1, modulus)) % modulus
+    denominator_inv = pow(denominator, -1, modulus)
+    coefficients = [(int(c) * denominator_inv) % modulus for c in numerator.coefficients]
+    coefficients.reverse()
+    return coefficients
+
+def lagrange_coefficient(indices: Set[int], excluding: int, power: int = 0, modulus: int = n) -> int:
+    if power == 0: # Computing the constant term is the same as evaluating X = 0
+        return eval_lagrange(indices, excluding, 0, modulus)
+    else:
+        return lagrange_coefficients(indices, excluding, modulus)[power]
 
 RSSSummand = NamedTuple('RSSSubShare', [('value', bytes), ('excluded_indices', Set)])
 RSSShare = NewType('RSSShare', List[RSSSummand])
@@ -67,11 +91,13 @@ def verify(t: int, mu: int, commitments: List[VPSSCommitment]) -> bool:
     if len(commitments) < mu:
         return False
 
+    coefficients = all_lagrange_coefficients(set([j for j, _ in commitments]))
     for i in range(t, len(commitments)):
         B_i = infinity
         for j, D_j in commitments:
-            indices = set([k for k, _ in commitments])
-            B_i = point_add(B_i, point_mul(cpoint_ext(D_j), lagrange_coefficient(indices, j, i)))
+            coefficient_i = coefficients[j][i] if len(coefficients[j]) > i else 0
+            B_i = point_add(B_i, point_mul(cpoint_ext(D_j), coefficient_i))
+
         if B_i != infinity:
             return False
 
