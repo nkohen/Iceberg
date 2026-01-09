@@ -86,14 +86,17 @@ def sign_agg(psigs: List[Tuple[int, bytes]]) -> bytes:
 
     return bytes_from_int(s)
 
-def test_random(n: int, t: int, mu: int) -> None:
+def test_random(n: int, t: int, mu: int, use_caching: bool) -> None:
     prf_sk_shares = vpss.key_gen(n, t, mu)
     prf_sk = {}
     prf_sk_cache = {}
     pks = []
     for (k, sk_k) in enumerate(prf_sk_shares, 1):
         prf_sk[k] = sk_k
-        prf_sk_cache[k] = vpss.create_cache(k, sk_k)
+        if use_caching:
+            prf_sk_cache[k] = vpss.create_cache(k, sk_k)
+        else:
+            prf_sk_cache[k] = None
         _, pk_k = key_gen(k, sk_k, prf_sk_cache[k])
         pks.append(VPSSCommitment(k, pk_k))
     pk_1 = pk_agg(t, mu, pks)
