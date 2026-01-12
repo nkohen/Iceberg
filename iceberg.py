@@ -9,7 +9,7 @@ from musig import SessionContext as MuSigSessionContext, sign as musig_sign, \
     get_xonly_pk, key_agg_and_tweak as musig_key_agg_and_tweak, nonce_gen as musig_nonce_gen, \
     nonce_agg as musig_nonce_agg, get_session_values, \
     has_even_y, point_mul, cpoint, get_session_key_agg_coeff, G, partial_sig_agg as musig_partial_sig_agg, \
-    schnorr_verify, bytes_from_int, int_from_bytes, n, InvalidContributionError
+    schnorr_verify, bytes_from_int, int_from_bytes, n, InvalidContributionError, tagged_hash, cbytes
 from vpss import RSSShare, RSSShareCache, VPSSCommitment, eval_lagrange
 
 key_msg: bytes = 'Iceberg/keygen'.encode()
@@ -43,13 +43,24 @@ def nonce_agg(t: int, mu: int, pubnonces: List[Tuple[int, bytes]]) -> bytes:
     aggnonce = vpss.agg(commitments_1) + vpss.agg(commitments_2)
     return aggnonce
 
-def sign(k: int, sk_k: RSSShare, agg_pk: bytes, sid: bytes, upper_session_ctx: MuSigSessionContext, cache: Optional[RSSShareCache] = None) -> bytes:
+def nonce_agg_ext(pk: bytes, aggnonce: bytes) -> bytes:
+    R_1 = aggnonce[0:33]
+    R_2_prime = aggnonce[33:66]
+    b_1 = int_from_bytes(tagged_hash('Iceberg/noncecoef', R_1 + R_2_prime + pk))
+    R_2 = cbytes(point_mul(cpoint(R_2_prime), b_1))
+
+    return R_1 + R_2
+
+def sign(k: int, sk_k: RSSShare, agg_pk: bytes, sid: bytes, aggnonce: bytes, upper_session_ctx: MuSigSessionContext, cache: Optional[RSSShareCache] = None) -> bytes:
     assert len(sid) == 32
     sk, _ = key_gen(k, sk_k)
     gen_share_1, _ = vpss.gen(k, sk_k, bytes_from_int(1) + sid, cache)
     gen_share_2, _ = vpss.gen(k, sk_k, bytes_from_int(2) + sid, cache)
 
-    (Q, gacc, _, b, R, e) = get_session_values(upper_session_ctx)
+    R_1 = aggnonce[0:33]
+    R_2_prime = aggnonce[33:66]
+    b_1 = int_from_bytes(tagged_hash('Iceberg/noncecoef', R_1 + R_2_prime + agg_pk))
+    (Q, gacc, _, b_0, R, e) = get_session_values(upper_session_ctx)
     k_1_ = int_from_bytes(gen_share_1.value)
     k_2_ = int_from_bytes(gen_share_2.value)
     if not 0 < k_1_ < n:
@@ -64,7 +75,7 @@ def sign(k: int, sk_k: RSSShare, agg_pk: bytes, sid: bytes, upper_session_ctx: M
     a = get_session_key_agg_coeff(upper_session_ctx, cpoint(agg_pk))
     g = 1 if has_even_y(Q) else n - 1
     d = g * gacc * d_ % n
-    s = (k_1 + b * k_2 + e * a * d) % n
+    s = (k_1 + b_0 * b_1 * k_2 + e * a * d) % n
     psig = bytes_from_int(s)
     R_s1 = point_mul(G, k_1_)
     R_s2 = point_mul(G, k_2_)
@@ -117,7 +128,8 @@ def test_random(n: int, t: int, mu: int, use_caching: bool) -> None:
     for k in nonce_gen_signers:
         _, pubnonce_k = nonce_gen(k, prf_sk[k], sid, prf_sk_cache[k])
         pubnonces.append((k, pubnonce_k))
-    pubnonce_1 = nonce_agg(t, mu, pubnonces)
+    pubnonce_1_internal = nonce_agg(t, mu, pubnonces)
+    pubnonce_1 = nonce_agg_ext(pk_1, pubnonce_1_internal)
 
     extra_in = time.clock_gettime_ns(time.CLOCK_MONOTONIC)
     secnonce_2, pubnonce_2 = musig_nonce_gen(sk_2, pk_2, aggpk, msg, extra_in.to_bytes(8, 'big'))
@@ -128,9 +140,9 @@ def test_random(n: int, t: int, mu: int, use_caching: bool) -> None:
     signers = random.sample(range(1, n+1), mu)
     psigs = []
     for k in signers:
-        psig_k = sign(k, prf_sk[k], pk_1, sid, upper_ctx, prf_sk_cache[k])
+        psig_k = sign(k, prf_sk[k], pk_1, sid, pubnonce_1_internal, upper_ctx, prf_sk_cache[k])
         # sign is deterministic
-        assert sign(k, prf_sk[k], pk_1, sid, upper_ctx, prf_sk_cache[k]) == psig_k
+        assert sign(k, prf_sk[k], pk_1, sid, pubnonce_1_internal, upper_ctx, prf_sk_cache[k]) == psig_k
         psigs.append((k, psig_k))
     psig_1 = sign_agg(psigs)
 
@@ -138,7 +150,7 @@ def test_random(n: int, t: int, mu: int, use_caching: bool) -> None:
     concurrent_signers = random.sample(range(1, n+1), mu)
     psigs = []
     for k in concurrent_signers:
-        psig_k = sign(k, prf_sk[k], pk_1, sid, upper_ctx, prf_sk_cache[k])
+        psig_k = sign(k, prf_sk[k], pk_1, sid, pubnonce_1_internal, upper_ctx, prf_sk_cache[k])
         psigs.append((k, psig_k))
     assert sign_agg(psigs) == psig_1
 
